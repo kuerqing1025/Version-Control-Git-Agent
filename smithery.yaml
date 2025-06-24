@@ -4,9 +4,6 @@ description: A Git analysis and management MCP server
 
 # Runtime configuration for Smithery deployment
 runtime: "container"
-build:
-  dockerfile: "Dockerfile"
-  dockerBuildPath: "."
 
 # Server configuration
 server:
@@ -33,35 +30,36 @@ playground:
       code: |
         // Get current changes
         const status = await getContext('git_status');
+        console.log('Current changes:', status.changes);
         
-        // Create commit with analysis
+        // Create smart commit
         const result = await callTool('commit_changes', {
-          files: status.changes.map(c => c.path),
-          style: {
-            type: 'conventional',
-            includeScope: true,
-            includeFooter: true,
-            maxLength: 100
-          }
+          message: 'Auto-generated commit message',
+          files: ['src/index.ts']
         });
-        
-        console.log('Commit created:', result);
+        console.log('Commit result:', result);
 
     - name: "Code Review"
-      description: "Get automated code review feedback"
+      description: "Get AI-powered code review feedback"
       code: |
-        // Get current changes
-        const status = await getContext('git_status');
-        
-        // Get review feedback
+        // Review current changes
         const review = await callTool('review_changes', {
-          files: status.changes.map(c => c.path)
+          target: 'staged'
         });
-        
-        console.log('Review feedback:', review.feedback);
+        console.log('Review feedback:', review);
+
+    - name: "Suggest Improvements"
+      description: "Get code improvement suggestions"
+      code: |
+        // Get improvement suggestions
+        const suggestions = await callTool('suggest_improvements', {
+          files: ['src/index.ts'],
+          focus: 'performance'
+        });
+        console.log('Suggestions:', suggestions);
 
   demo_repository:
-    url: "https://github.com/yourusername/demo-repo"
+    url: "https://github.com/kuerqing1025/Version-Control-Git-Agent.git"
     branch: "main"
     read_only: true
 
@@ -116,7 +114,7 @@ update_config:
 # Build configuration
 build:
   dockerfile: "Dockerfile"
-  context: "."
+  dockerBuildPath: "."
 
 # MCP Server metadata
 mcp:
