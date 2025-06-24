@@ -1,0 +1,40 @@
+{
+  "name": "mcp-git-agent",
+  "version": "1.0.0",
+  "description": "AI-powered Git workflow assistant as an MCP server",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "git",
+    "ai",
+    "assistant",
+    "model-context-protocol"
+  ],
+  "author": "Git Agent Team",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "@smithery/sdk": "^1.5.2",
+    "js-yaml": "^4.1.0",
+    "simple-git": "^3.28.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.0.0",
+    "@types/socket.io": "^3.0.1",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

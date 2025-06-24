@@ -1,0 +1,541 @@
+name: git-agent
+version: 1.0.0
+description: A Git analysis and management MCP server
+
+# Runtime configuration for Smithery deployment
+runtime: "container"
+build:
+  dockerfile: "Dockerfile"
+  dockerBuildPath: "."
+
+# Server configuration
+server:
+  port: 3000
+  env:
+    NODE_ENV: "production"
+
+# Playground configuration
+playground:
+  enabled: true
+  title: "Git Agent MCP"
+  description: "Try out Git analysis and management tools"
+  examples:
+    - name: "Analyze Repository"
+      description: "Analyze a Git repository and get insights"
+      code: |
+        // Get repository analysis
+        const analysis = await getContext('repository_analysis');
+        console.log('Code Quality:', analysis.codeQuality);
+        console.log('Recommendations:', analysis.recommendations);
+
+    - name: "Smart Commit"
+      description: "Create a commit with automated analysis and message generation"
+      code: |
+        // Get current changes
+        const status = await getContext('git_status');
+        
+        // Create commit with analysis
+        const result = await callTool('commit_changes', {
+          files: status.changes.map(c => c.path),
+          style: {
+            type: 'conventional',
+            includeScope: true,
+            includeFooter: true,
+            maxLength: 100
+          }
+        });
+        
+        console.log('Commit created:', result);
+
+    - name: "Code Review"
+      description: "Get automated code review feedback"
+      code: |
+        // Get current changes
+        const status = await getContext('git_status');
+        
+        // Get review feedback
+        const review = await callTool('review_changes', {
+          files: status.changes.map(c => c.path)
+        });
+        
+        console.log('Review feedback:', review.feedback);
+
+  demo_repository:
+    url: "https://github.com/yourusername/demo-repo"
+    branch: "main"
+    read_only: true
+
+# Documentation
+docs:
+  overview: |
+    The Git Agent MCP provides intelligent Git operations and code analysis tools.
+    It can help you with:
+    - Code quality analysis
+    - Smart commit message generation
+    - Automated code review
+    - Repository insights
+    
+  quick_start: |
+    1. Connect to the MCP server
+    2. Get repository analysis using `getContext('repository_analysis')`
+    3. Use tools like `commit_changes` and `review_changes`
+    
+  examples_md: |
+    ## Example: Smart Commit
+    ```typescript
+    const status = await getContext('git_status');
+    const result = await callTool('commit_changes', {
+      files: status.changes.map(c => c.path),
+      style: { type: 'conventional' }
+    });
+    ```
+    
+    ## Example: Code Review
+    ```typescript
+    const review = await callTool('review_changes', {
+      files: ['src/main.ts']
+    });
+    ```
+
+# Server configuration
+server:
+  command: "node"
+  args: ["dist/index.js"]
+
+update_config:
+  auto_update: true
+  update_check_interval: 3600  # 每小时检查一次更新
+  update_source:
+    type: git
+    repository: ${REPO_URL}
+    branch: main
+  backup:
+    enabled: true
+    path: .backups
+
+# Build configuration
+build:
+  dockerfile: "Dockerfile"
+  context: "."
+
+# MCP Server metadata
+mcp:
+  tools:
+    - name: "get_git_status"
+      description: "Get current Git repository status including staged, unstaged, and untracked files"
+    
+    - name: "get_commit_history"
+      description: "Retrieve Git commit history with detailed information about each commit"
+      
+    - name: "analyze_code_changes"
+      description: "AI-powered analysis of code changes explaining impact and implications"
+      
+    - name: "generate_commit_message"
+      description: "Generate intelligent, conventional commit messages based on staged changes"
+      
+    - name: "get_file_diff"
+      description: "Get detailed diff information for specific files"
+      
+    - name: "get_file_blame"
+      description: "Get line-by-line authorship information for files"
+      
+    - name: "summarize_project_history"
+      description: "Generate comprehensive project development summary from Git history"
+      
+    - name: "get_repository_stats"
+      description: "Get detailed repository statistics including commits, contributors, and activity"
+
+  resources:
+    - name: "git_repository"
+      description: "Access to Git repository information and operations"
+      
+    - name: "project_files"
+      description: "Access to project file structure and content"
+
+# Categories for discovery
+categories:
+  - "developer-tools"
+  - "git"
+  - "ai-assistant"
+  - "code-analysis"
+
+# Tags for searchability
+tags:
+  - "git"
+  - "version-control"
+  - "ai"
+  - "code-analysis"
+  - "commit-messages"
+  - "developer-productivity"
+
+# Context providers define how the agent gets information
+context_providers:
+  git_status:
+    description: Get current Git repository status
+    returns:
+      type: object
+      properties:
+        branch:
+          type: string
+        changes:
+          type: array
+          items:
+            $ref: "#/types/GitFileChange"
+        lastCommit:
+          $ref: "#/types/GitCommit"
+
+  repository_analysis:
+    description: Get repository analysis and insights
+    returns:
+      type: object
+      properties:
+        codeQuality:
+          $ref: "#/types/GitAnalysis"
+        stats:
+          $ref: "#/types/GitStats"
+        recommendations:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [commit, refactor, review, test]
+              description:
+                type: string
+              priority:
+                type: number
+
+  update_status:
+    description: Get MCP server update status
+    returns:
+      type: object
+      properties:
+        currentVersion:
+          type: string
+        latestVersion:
+          type: string
+        updateAvailable:
+          type: boolean
+        lastUpdateCheck:
+          type: string
+          format: date-time
+        lastUpdate:
+          type: string
+          format: date-time
+        pendingChanges:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [feature, bugfix, security]
+              description:
+                type: string
+
+# Tools define actions the agent can take
+tools:
+  commit_changes:
+    description: Analyze changes and create a commit
+    parameters:
+      files:
+        type: array
+        items:
+          type: string
+        description: Files to commit
+      style:
+        $ref: "#/types/CommitMessageStyle"
+        description: Preferred commit message style
+    returns:
+      type: object
+      properties:
+        success:
+          type: boolean
+        commitHash:
+          type: string
+        message:
+          type: string
+        analysis:
+          $ref: "#/types/GitAnalysis"
+
+  suggest_improvements:
+    description: Analyze code and suggest improvements
+    parameters:
+      files:
+        type: array
+        items:
+          type: string
+    returns:
+      type: object
+      properties:
+        suggestions:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [quality, security, performance]
+              description:
+                type: string
+              location:
+                type: string
+              priority:
+                type: number
+
+  review_changes:
+    description: Review code changes and provide feedback
+    parameters:
+      files:
+        type: array
+        items:
+          type: string
+    returns:
+      type: object
+      properties:
+        feedback:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [issue, suggestion, praise]
+              message:
+                type: string
+              location:
+                type: string
+              severity:
+                type: string
+                enum: [low, medium, high]
+
+  rollback_changes:
+    description: Safely rollback changes with analysis
+    parameters:
+      options:
+        $ref: "#/types/RollbackOptions"
+    returns:
+      type: object
+      properties:
+        analysis:
+          type: object
+          properties:
+            impact:
+              type: string
+            affectedComponents:
+              type: array
+              items:
+                type: string
+        result:
+          $ref: "#/types/RollbackResult"
+
+  check_for_updates:
+    description: Check for available MCP server updates
+    returns:
+      type: object
+      properties:
+        updateAvailable:
+          type: boolean
+        currentVersion:
+          type: string
+        latestVersion:
+          type: string
+        changes:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              description:
+                type: string
+
+  apply_update:
+    description: Apply available MCP server updates
+    parameters:
+      version:
+        type: string
+        description: Target version to update to
+        optional: true
+      backup:
+        type: boolean
+        description: Whether to create a backup before updating
+        default: true
+    returns:
+      type: object
+      properties:
+        success:
+          type: boolean
+        previousVersion:
+          type: string
+        newVersion:
+          type: string
+        backupCreated:
+          type: boolean
+        backupPath:
+          type: string
+        error:
+          type: string
+          optional: true
+
+  rollback_update:
+    description: Rollback to a previous version
+    parameters:
+      version:
+        type: string
+        description: Version to rollback to
+      useBackup:
+        type: boolean
+        description: Whether to use backup for rollback
+        default: true
+    returns:
+      type: object
+      properties:
+        success:
+          type: boolean
+        currentVersion:
+          type: string
+        error:
+          type: string
+          optional: true
+
+# Types used by both context providers and tools
+types:
+  GitCommit:
+    type: object
+    properties:
+      hash:
+        type: string
+      author:
+        type: string
+      date:
+        type: string
+        format: date-time
+      message:
+        type: string
+      stats:
+        type: object
+        properties:
+          additions:
+            type: number
+          deletions:
+            type: number
+          files:
+            type: number
+
+  GitFileChange:
+    type: object
+    properties:
+      path:
+        type: string
+      status:
+        type: string
+        enum: [added, modified, deleted, renamed]
+      additions:
+        type: number
+      deletions:
+        type: number
+      oldPath:
+        type: string
+        optional: true
+
+  GitAnalysis:
+    type: object
+    properties:
+      impactScore:
+        type: number
+      complexityScore:
+        type: number
+      securityIssues:
+        type: array
+        items:
+          type: object
+          properties:
+            severity:
+              type: string
+              enum: [low, medium, high]
+            description:
+              type: string
+            location:
+              type: string
+      performanceImpact:
+        type: object
+        properties:
+          score:
+            type: number
+          details:
+            type: array
+            items:
+              type: string
+
+  GitStats:
+    type: object
+    properties:
+      totalCommits:
+        type: number
+      contributors:
+        type: array
+        items:
+          type: object
+          properties:
+            name:
+              type: string
+            commits:
+              type: number
+            additions:
+              type: number
+            deletions:
+              type: number
+      mostChangedFiles:
+        type: array
+        items:
+          type: object
+          properties:
+            path:
+              type: string
+            changes:
+              type: number
+
+  CommitMessageStyle:
+    type: object
+    properties:
+      type:
+        type: string
+        enum: [conventional, gitmoji, detailed, simple]
+      includeScope:
+        type: boolean
+      includeFooter:
+        type: boolean
+      maxLength:
+        type: number
+
+  RollbackOptions:
+    type: object
+    properties:
+      type:
+        type: string
+        enum: [commit, file]
+      target:
+        type: string
+      commitHash:
+        type: string
+        optional: true
+      createBackup:
+        type: boolean
+        optional: true
+
+  RollbackResult:
+    type: object
+    properties:
+      success:
+        type: boolean
+      backupCreated:
+        type: boolean
+        optional: true
+      backupPath:
+        type: string
+        optional: true
+      error:
+        type: string
+        optional: true 
