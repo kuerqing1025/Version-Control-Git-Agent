@@ -536,4 +536,23 @@ types:
         optional: true
       error:
         type: string
-        optional: true 
+        optional: true
+
+startCommand:
+  type: "http"
+  configSchema:
+    type: "object"
+    properties:
+      gitPath:
+        type: "string"
+        description: "Path to git repository (optional)"
+        default: "."
+      analysisDepth:
+        type: "string"
+        description: "Depth of code analysis"
+        enum: ["basic", "detailed", "comprehensive"]
+        default: "detailed"
+    required: []
+  exampleConfig:
+    gitPath: "."
+    analysisDepth: "detailed" 
