@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import express from 'express';
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -119,6 +119,9 @@ class GitFileForensicsServer {
   }
 
   constructor() {
+    const app = express();
+    const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
+
     this.server = new Server(
       {
         name: 'git-file-forensics-mcp',
@@ -132,6 +135,22 @@ class GitFileForensicsServer {
     );
 
     this.setupToolHandlers();
+    
+    app.use(express.json());
+    
+    app.post('/mcp', async (req, res) => {
+      try {
+        const response = await this.server.handle(req.body);
+        res.json(response);
+      } catch (error) {
+        console.error('[MCP Error]', error);
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    });
+    
+    app.listen(port, () => {
+      console.log(`Git File Forensics MCP server running on port ${port}`);
+    });
     
     this.server.onerror = (error: Error) => console.error('[MCP Error]', error);
     process.on('SIGINT', async () => {
@@ -560,9 +579,7 @@ class GitFileForensicsServer {
   }
 
   async run() {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-    console.error('Git File Forensics MCP server running on stdio');
+    console.log('Git File Forensics MCP server started');
   }
 }
 

@@ -3,11 +3,12 @@ version: 1.0.0
 description: A Git analysis and management MCP server
 
 # Runtime configuration for Smithery deployment
-runtime: "container"
+runtime: "http"
 
 # Server configuration
 server:
   port: 3000
+  type: "http"
   env:
     NODE_ENV: "production"
 
