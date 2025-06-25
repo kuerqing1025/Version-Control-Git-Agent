@@ -1,290 +1,570 @@
 #!/usr/bin/env node
-
-import express from 'express';
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
+  ErrorCode,
   ListToolsRequestSchema,
-  GetPromptRequestSchema,
-  ListPromptsRequestSchema,
-  ListResourcesRequestSchema,
-  ReadResourceRequestSchema,
-  Tool,
-} from "@modelcontextprotocol/sdk/types.js";
-import simpleGit, { SimpleGit } from "simple-git";
-import { GitService } from './services/GitService.js';
-import { CodeAnalysisService } from './services/CodeAnalysisService.js';
-import { CommitMessageService } from './services/CommitMessageService.js';
+  McpError,
+} from '@modelcontextprotocol/sdk/types.js';
+import { execSync } from 'child_process';
+import { writeFileSync } from 'fs';
+import { join } from 'path';
 
-class GitAgentServer {
+interface FileVersionArgs {
+  repoPath: string;
+  file: string;
+  outputPath: string;
+}
+
+interface FileDiffArgs {
+  repoPath: string;
+  file: string;
+  versions: {
+    from: string;
+    to: string;
+  };
+  outputPath: string;
+}
+
+interface FileContextArgs {
+  repoPath: string;
+  file: string;
+  commit: string;
+  outputPath: string;
+}
+
+interface FileSemanticArgs {
+  repoPath: string;
+  file: string;
+  outputPath: string;
+}
+
+interface SemanticChange {
+  type: 'addition' | 'deletion' | 'modification';
+  content: string;
+  context?: string;
+  impact: 'high' | 'medium' | 'low';
+}
+
+interface ChangePattern {
+  pattern: string;
+  frequency: number;
+  significance: 'high' | 'medium' | 'low';
+  context: string;
+}
+
+class GitFileForensicsServer {
   private server: Server;
-  private git: SimpleGit;
-  private gitService: GitService;
-  private analysisService: CodeAnalysisService;
-  private commitService: CommitMessageService;
-  private config: any;
 
-  constructor(config: any = {}) {
-    this.config = config;
+  private isFileVersionArgs(args: unknown): args is FileVersionArgs {
+    return (
+      typeof args === 'object' &&
+      args !== null &&
+      'repoPath' in args &&
+      'file' in args &&
+      'outputPath' in args &&
+      typeof (args as FileVersionArgs).repoPath === 'string' &&
+      typeof (args as FileVersionArgs).file === 'string' &&
+      typeof (args as FileVersionArgs).outputPath === 'string'
+    );
+  }
+
+  private isFileDiffArgs(args: unknown): args is FileDiffArgs {
+    return (
+      typeof args === 'object' &&
+      args !== null &&
+      'repoPath' in args &&
+      'file' in args &&
+      'versions' in args &&
+      'outputPath' in args &&
+      typeof (args as FileDiffArgs).repoPath === 'string' &&
+      typeof (args as FileDiffArgs).file === 'string' &&
+      typeof (args as FileDiffArgs).outputPath === 'string' &&
+      typeof (args as FileDiffArgs).versions === 'object' &&
+      (args as FileDiffArgs).versions !== null &&
+      'from' in (args as FileDiffArgs).versions &&
+      'to' in (args as FileDiffArgs).versions &&
+      typeof (args as FileDiffArgs).versions.from === 'string' &&
+      typeof (args as FileDiffArgs).versions.to === 'string'
+    );
+  }
+
+  private isFileContextArgs(args: unknown): args is FileContextArgs {
+    return (
+      typeof args === 'object' &&
+      args !== null &&
+      'repoPath' in args &&
+      'file' in args &&
+      'commit' in args &&
+      'outputPath' in args &&
+      typeof (args as FileContextArgs).repoPath === 'string' &&
+      typeof (args as FileContextArgs).file === 'string' &&
+      typeof (args as FileContextArgs).commit === 'string' &&
+      typeof (args as FileContextArgs).outputPath === 'string'
+    );
+  }
+
+  private isFileSemanticArgs(args: unknown): args is FileSemanticArgs {
+    return (
+      typeof args === 'object' &&
+      args !== null &&
+      'repoPath' in args &&
+      'file' in args &&
+      'outputPath' in args &&
+      typeof (args as FileSemanticArgs).repoPath === 'string' &&
+      typeof (args as FileSemanticArgs).file === 'string' &&
+      typeof (args as FileSemanticArgs).outputPath === 'string'
+    );
+  }
+
+  constructor() {
     this.server = new Server(
       {
-        name: "mcp-git-agent",
-        version: "1.0.0",
+        name: 'git-file-forensics-mcp',
+        version: '0.1.0',
       },
       {
         capabilities: {
           tools: {},
-          prompts: {},
-          resources: {},
         },
       }
     );
+
+    this.setupToolHandlers();
     
-    this.git = simpleGit(config.gitPath || process.cwd());
-    this.gitService = new GitService(config.gitPath || process.cwd());
-    this.analysisService = new CodeAnalysisService();
-    this.commitService = new CommitMessageService();
-    
-    this.setupHandlers();
+    this.server.onerror = (error: Error) => console.error('[MCP Error]', error);
+    process.on('SIGINT', async () => {
+      await this.server.close();
+      process.exit(0);
+    });
   }
 
-  private setupHandlers() {
-    // List available tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return {
-        tools: [
-          {
-            name: "get_git_status",
-            description: "Get current Git repository status",
-            inputSchema: {
-              type: "object",
-              properties: {
-                repository_path: {
-                  type: "string",
-                  description: "Path to the Git repository",
-                },
+  private setupToolHandlers() {
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: [
+        {
+          name: 'track_file_versions',
+          description: 'Track complete version history of a specific file, including renames and moves',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              repoPath: {
+                type: 'string',
+                description: 'Path to git repository',
+              },
+              file: {
+                type: 'string',
+                description: 'File to analyze',
+              },
+              outputPath: {
+                type: 'string',
+                description: 'Path to write analysis output',
               },
             },
+            required: ['repoPath', 'file', 'outputPath'],
           },
-          {
-            name: "get_commit_history",
-            description: "Retrieve Git commit history",
-            inputSchema: {
-              type: "object",
-              properties: {
-                limit: {
-                  type: "number",
-                  description: "Maximum number of commits",
-                  default: 10,
+        },
+        {
+          name: 'analyze_file_diff',
+          description: 'Analyze specific changes between any two versions of a file',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              repoPath: {
+                type: 'string',
+                description: 'Path to git repository',
+              },
+              file: {
+                type: 'string',
+                description: 'File to analyze',
+              },
+              versions: {
+                type: 'object',
+                properties: {
+                  from: { type: 'string' },
+                  to: { type: 'string' },
                 },
+                required: ['from', 'to'],
+              },
+              outputPath: {
+                type: 'string',
+                description: 'Path to write analysis output',
               },
             },
+            required: ['repoPath', 'file', 'versions', 'outputPath'],
           },
-          {
-            name: "analyze_code_changes",
-            description: "AI-powered analysis of code changes",
-            inputSchema: {
-              type: "object",
-              properties: {
-                file_path: {
-                  type: "string",
-                  description: "Path to the file to analyze",
-                },
-                analysis_type: {
-                  type: "string",
-                  enum: ["impact", "quality", "security", "performance"],
-                  default: "impact",
-                },
+        },
+        {
+          name: 'analyze_file_context',
+          description: 'Analyze broader context of file changes in a specific commit',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              repoPath: {
+                type: 'string',
+                description: 'Path to git repository',
+              },
+              file: {
+                type: 'string',
+                description: 'File to analyze',
+              },
+              commit: {
+                type: 'string',
+                description: 'Commit hash to analyze',
+              },
+              outputPath: {
+                type: 'string',
+                description: 'Path to write analysis output',
               },
             },
+            required: ['repoPath', 'file', 'commit', 'outputPath'],
           },
-          {
-            name: "generate_commit_message",
-            description: "Generate intelligent commit messages",
-            inputSchema: {
-              type: "object",
-              properties: {
-                style: {
-                  type: "string",
-                  enum: ["conventional", "detailed", "concise"],
-                  default: "conventional",
-                },
+        },
+        {
+          name: 'analyze_file_semantics',
+          description: 'Analyze semantic changes and patterns in file history',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              repoPath: {
+                type: 'string',
+                description: 'Path to git repository',
+              },
+              file: {
+                type: 'string',
+                description: 'File to analyze',
+              },
+              outputPath: {
+                type: 'string',
+                description: 'Path to write analysis output',
               },
             },
+            required: ['repoPath', 'file', 'outputPath'],
           },
-        ] satisfies Tool[],
-      };
-    });
+        },
+      ],
+    }));
 
-    // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-
+      const args = request.params.arguments;
       try {
-        switch (name) {
-          case "get_git_status":
-            return await this.getGitStatus(args);
-          case "get_commit_history":
-            return await this.getCommitHistory(args);
-          case "analyze_code_changes":
-            return await this.analyzeCodeChanges(args);
-          case "generate_commit_message":
-            return await this.generateCommitMessage(args);
+        switch (request.params.name) {
+          case 'track_file_versions': {
+            const args = request.params.arguments as unknown;
+            if (!this.isFileVersionArgs(args)) {
+              throw new McpError(ErrorCode.InvalidParams, 'Missing required parameters');
+            }
+            return await this.handleFileVersions(args);
+          }
+          case 'analyze_file_diff': {
+            const args = request.params.arguments as unknown;
+            if (!this.isFileDiffArgs(args)) {
+              throw new McpError(ErrorCode.InvalidParams, 'Missing required parameters');
+            }
+            return await this.handleFileDiff(args);
+          }
+          case 'analyze_file_context': {
+            const args = request.params.arguments as unknown;
+            if (!this.isFileContextArgs(args)) {
+              throw new McpError(ErrorCode.InvalidParams, 'Missing required parameters');
+            }
+            return await this.handleFileContext(args);
+          }
+          case 'analyze_file_semantics': {
+            const args = request.params.arguments as unknown;
+            if (!this.isFileSemanticArgs(args)) {
+              throw new McpError(ErrorCode.InvalidParams, 'Missing required parameters');
+            }
+            return await this.handleFileSemantics(args);
+          }
           default:
-            throw new Error(`Unknown tool: ${name}`);
+            throw new McpError(
+              ErrorCode.MethodNotFound,
+              `Unknown tool: ${request.params.name}`
+            );
         }
       } catch (error) {
-        throw new Error(`Tool execution failed: ${error}`);
-      }
-    });
-
-    // Context providers
-    this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-      return {
-        resources: [
-          {
-            uri: "git://status",
-            name: "Git Status",
-            description: "Current repository status",
-            mimeType: "application/json",
-          },
-          {
-            uri: "git://analysis",
-            name: "Repository Analysis",
-            description: "Code quality and insights",
-            mimeType: "application/json",
-          },
-        ],
-      };
-    });
-
-    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-      const uri = request.params.uri;
-      
-      switch (uri) {
-        case "git://status":
-          return {
-            contents: [
-              {
-                uri,
-                mimeType: "application/json",
-                text: JSON.stringify(await this.gitService.getGitStatus(), null, 2),
-              },
-            ],
-          };
-        case "git://analysis":
-          return {
-            contents: [
-              {
-                uri,
-                mimeType: "application/json",
-                text: JSON.stringify(await this.gitService.getRepositoryStats(), null, 2),
-              },
-            ],
-          };
-        default:
-          throw new Error(`Unknown resource: ${uri}`);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Git file forensics error: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          isError: true,
+        };
       }
     });
   }
 
-  private async getGitStatus(args: any) {
-    const status = await this.gitService.getGitStatus();
+  private async handleFileVersions(args: FileVersionArgs) {
+    const history = this.getCompleteFileHistory(args.repoPath, args.file);
+    const renames = this.getFileRenames(args.repoPath, args.file);
+    
+    const analysis = {
+      history,
+      renames,
+      summary: this.generateVersionSummary(history),
+    };
+
+    writeFileSync(args.outputPath, JSON.stringify(analysis, null, 2));
+
     return {
       content: [
         {
-          type: "text",
-          text: JSON.stringify(status, null, 2),
+          type: 'text',
+          text: `File version analysis written to ${args.outputPath}`,
         },
       ],
     };
   }
 
-  private async getCommitHistory(args: any) {
-    const history = await this.gitService.getCommitHistory(args.limit || 10);
+  private async handleFileDiff(args: FileDiffArgs) {
+    const diff = this.getFileDiff(args.repoPath, args.file, args.versions);
+    const movedBlocks = this.findMovedBlocks(diff);
+    
+    const analysis = {
+      diff,
+      movedBlocks,
+      summary: this.generateDiffSummary(diff),
+    };
+
+    writeFileSync(args.outputPath, JSON.stringify(analysis, null, 2));
+
     return {
       content: [
         {
-          type: "text",
-          text: JSON.stringify(history, null, 2),
+          type: 'text',
+          text: `File diff analysis written to ${args.outputPath}`,
         },
       ],
     };
   }
 
-  private async analyzeCodeChanges(args: any) {
-    const files = args.file_path ? [args.file_path] : [];
-    const analysis = await this.analysisService.analyzeFiles(files);
+  private async handleFileContext(args: FileContextArgs) {
+    const relatedFiles = this.getRelatedFiles(args.repoPath, args.file, args.commit);
+    const commitInfo = this.getCommitContext(args.repoPath, args.commit);
+    
+    const analysis = {
+      relatedFiles,
+      commitInfo,
+      summary: this.generateContextSummary(relatedFiles, commitInfo),
+    };
+
+    writeFileSync(args.outputPath, JSON.stringify(analysis, null, 2));
+
     return {
       content: [
         {
-          type: "text",
-          text: JSON.stringify(analysis, null, 2),
+          type: 'text',
+          text: `File context analysis written to ${args.outputPath}`,
         },
       ],
     };
   }
 
-  private async generateCommitMessage(args: any) {
-    const changes = await this.gitService.getGitStatus();
-    const message = await this.commitService.generateMessage(
+  private async handleFileSemantics(args: FileSemanticArgs) {
+    const changes = this.getSemanticChanges(args.repoPath, args.file);
+    const patterns = this.analyzeChangePatterns(changes);
+    
+    const analysis = {
       changes,
-      args.style || "conventional"
-    );
+      patterns,
+      summary: this.generateSemanticSummary(changes, patterns),
+    };
+
+    writeFileSync(args.outputPath, JSON.stringify(analysis, null, 2));
+
     return {
       content: [
         {
-          type: "text",
-          text: message,
+          type: 'text',
+          text: `File semantic analysis written to ${args.outputPath}`,
         },
       ],
     };
   }
 
-  getServer() {
-    return this.server;
+  private getCompleteFileHistory(repoPath: string, file: string) {
+    const output = execSync(
+      `cd "${repoPath}" && git log --follow --format="%H|%aI|%an|%s" -- "${file}"`,
+      { encoding: 'utf8' }
+    );
+
+    return output.trim().split('\n').filter(Boolean).map(line => {
+      const [hash, date, author, message] = line.split('|');
+      return { hash, date, author, message };
+    });
+  }
+
+  private getFileRenames(repoPath: string, file: string) {
+    const output = execSync(
+      `cd "${repoPath}" && git log --follow --name-status --format="%H" -- "${file}"`,
+      { encoding: 'utf8' }
+    );
+
+    const renames: Array<{ commit: string; oldPath: string; newPath: string }> = [];
+    let currentCommit = '';
+
+    output.trim().split('\n').forEach(line => {
+      if (line.match(/^[0-9a-f]{40}$/)) {
+        currentCommit = line;
+      } else if (line.startsWith('R')) {
+        const [_, oldPath, newPath] = line.split(/\t/);
+        renames.push({ commit: currentCommit, oldPath, newPath });
+      }
+    });
+
+    return renames;
+  }
+
+  private getFileDiff(
+    repoPath: string,
+    file: string,
+    versions: { from: string; to: string }
+  ) {
+    return execSync(
+      `cd "${repoPath}" && git diff ${versions.from} ${versions.to} -- "${file}"`,
+      { encoding: 'utf8' }
+    );
+  }
+
+  private findMovedBlocks(diff: string) {
+    // Implement sophisticated code block movement detection
+    return [];
+  }
+
+  private getRelatedFiles(repoPath: string, file: string, commit: string) {
+    const output = execSync(
+      `cd "${repoPath}" && git show --name-only --format="" ${commit}`,
+      { encoding: 'utf8' }
+    );
+
+    return output.trim().split('\n').filter(f => f !== file);
+  }
+
+  private getCommitContext(repoPath: string, commit: string) {
+    const output = execSync(
+      `cd "${repoPath}" && git show --format="%H|%aI|%an|%s|%b" ${commit}`,
+      { encoding: 'utf8' }
+    );
+
+    const [hash, date, author, subject, body] = output.split('|');
+    return { hash, date, author, subject, body };
+  }
+
+  private getSemanticChanges(repoPath: string, file: string) {
+    const output = execSync(
+      `cd "${repoPath}" && git log --patch --format="%H|%aI|%s" -- "${file}"`,
+      { encoding: 'utf8' }
+    );
+
+    // Implement semantic change analysis
+    return [];
+  }
+
+  private analyzeChangePatterns(changes: SemanticChange[]): ChangePattern[] {
+    // Implement pattern analysis
+    return [];
+  }
+
+  private generateVersionSummary(history: Array<{ date: string; message: string }>) {
+    return {
+      totalVersions: history.length,
+      firstChange: history[history.length - 1],
+      lastChange: history[0],
+      changeFrequency: this.calculateChangeFrequency(history),
+    };
+  }
+
+  private generateDiffSummary(diff: string) {
+    const lines = diff.split('\n');
+    const additions = lines.filter(l => l.startsWith('+')).length;
+    const deletions = lines.filter(l => l.startsWith('-')).length;
+
+    return {
+      additions,
+      deletions,
+      changeSize: additions + deletions,
+      impactLevel: this.assessImpactLevel(additions + deletions),
+    };
+  }
+
+  private generateContextSummary(
+    relatedFiles: string[],
+    commitInfo: { subject: string }
+  ) {
+    return {
+      relatedFileCount: relatedFiles.length,
+      changeType: this.categorizeChange(commitInfo.subject),
+      impactScope: this.assessImpactScope(relatedFiles),
+    };
+  }
+
+  private generateSemanticSummary(changes: SemanticChange[], patterns: ChangePattern[]) {
+    return {
+      dominantPatterns: this.identifyDominantPatterns(patterns),
+      changeTypes: this.categorizeChanges(changes),
+      stability: this.assessFileStability(changes),
+    };
+  }
+
+  private calculateChangeFrequency(
+    history: Array<{ date: string }>
+  ): 'high' | 'medium' | 'low' {
+    if (history.length < 2) return 'low';
+
+    const dates = history.map(h => new Date(h.date));
+    const totalDays = (dates[0].getTime() - dates[dates.length - 1].getTime()) / (1000 * 60 * 60 * 24);
+    const changesPerDay = history.length / totalDays;
+
+    if (changesPerDay > 0.5) return 'high';
+    if (changesPerDay > 0.1) return 'medium';
+    return 'low';
+  }
+
+  private assessImpactLevel(changeSize: number): 'high' | 'medium' | 'low' {
+    if (changeSize > 100) return 'high';
+    if (changeSize > 30) return 'medium';
+    return 'low';
+  }
+
+  private categorizeChange(message: string): string {
+    if (message.match(/^feat|^add/i)) return 'feature';
+    if (message.match(/^fix|^bug/i)) return 'bugfix';
+    if (message.match(/^refactor/i)) return 'refactor';
+    if (message.match(/^docs/i)) return 'documentation';
+    return 'other';
+  }
+
+  private assessImpactScope(relatedFiles: string[]): 'high' | 'medium' | 'low' {
+    if (relatedFiles.length > 5) return 'high';
+    if (relatedFiles.length > 2) return 'medium';
+    return 'low';
+  }
+
+  private identifyDominantPatterns(patterns: ChangePattern[]): Array<{ pattern: string; significance: string }> {
+    // Implement pattern identification
+    return [];
+  }
+
+  private categorizeChanges(changes: SemanticChange[]): Record<string, number> {
+    // Implement change categorization
+    return {};
+  }
+
+  private assessFileStability(changes: SemanticChange[]): 'stable' | 'evolving' | 'volatile' {
+    // Implement stability assessment
+    return 'stable';
+  }
+
+  async run() {
+    const transport = new StdioServerTransport();
+    await this.server.connect(transport);
+    console.error('Git File Forensics MCP server running on stdio');
   }
 }
 
-// Create Express app
-const app = express();
-app.use(express.json());
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// MCP endpoints for Smithery
-app.all('/mcp', async (req, res) => {
-  try {
-    // Extract config from request
-    const config = req.body?.config || {};
-    
-    // Create MCP server instance
-    const gitAgent = new GitAgentServer(config);
-    const server = gitAgent.getServer();
-    
-    // Create SSE transport for this request
-    const transport = new SSEServerTransport('/mcp', res);
-    
-    // Connect server to transport
-    await server.connect(transport);
-    
-    // The transport handles the rest
-  } catch (error) {
-    console.error('MCP endpoint error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Git Agent MCP Server running on port ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/health`);
-  console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
-});
-
-export default app; 
+const server = new GitFileForensicsServer();
+server.run().catch(console.error);
